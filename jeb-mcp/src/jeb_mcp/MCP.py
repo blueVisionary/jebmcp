@@ -649,7 +649,7 @@ def get_method_smali_code(filepath, method_signature):
         print('Method not found: %s' % method_signature)
         raise_method_not_found(method_signature)
     
-    instructions = method.getInstructions()
+    instructions = get_method_instructions(method)
     smali_code = ""
     for instruction in instructions:
         smali_code = smali_code + instruction.format(None)  + "\n"
@@ -876,6 +876,373 @@ def get_class_fields(filepath, class_signature):
 
 
 @jsonrpc
+def get_all_classes(filepath, offset, limit):
+    """
+    Get all class signatures in the APK file with pagination support.
+
+    Args:
+        filepath: The absolute path to the APK file
+        offset: The starting index (0-based)
+        limit: The maximum number of classes to return (0 means return all remaining)
+
+    Returns:
+        A dict containing:
+        - classes: List of class signatures
+        - total: Total number of classes
+        - offset: The offset used
+        - limit: The limit used
+        - has_more: Whether there are more classes available
+    """
+    if not filepath:
+        raise JSONRPCError(-1, ErrorMessages.MISSING_PARAM)
+
+    apk = getOrLoadApk(filepath)
+    codeUnit = apk.getDex()
+
+    all_classes = codeUnit.getClasses()
+    total = len(all_classes)
+
+    # Validate offset
+    if offset < 0:
+        offset = 0
+    if offset >= total:
+        return {
+            "classes": [],
+            "total": total,
+            "offset": offset,
+            "limit": limit,
+            "has_more": False
+        }
+
+    # Calculate end index
+    if limit <= 0:
+        end = total
+    else:
+        end = min(offset + limit, total)
+
+    # Extract class signatures
+    result_classes = []
+    for i in range(offset, end):
+        clazz = all_classes[i]
+        result_classes.append(clazz.getSignature(True))
+
+    return {
+        "classes": result_classes,
+        "total": total,
+        "offset": offset,
+        "limit": limit,
+        "has_more": end < total
+    }
+
+
+@jsonrpc
+def get_all_strings(filepath, offset, limit):
+    """
+    Get all strings in the APK file with pagination support.
+
+    Args:
+        filepath: The absolute path to the APK file
+        offset: The starting index (0-based)
+        limit: The maximum number of strings to return (0 means return all remaining)
+
+    Returns:
+        A dict containing:
+        - strings: List of strings
+        - total: Total number of strings
+        - offset: The offset used
+        - limit: The limit used
+        - has_more: Whether there are more strings available
+    """
+    if not filepath:
+        raise JSONRPCError(-1, ErrorMessages.MISSING_PARAM)
+
+    apk = getOrLoadApk(filepath)
+    codeUnit = apk.getDex()
+
+    all_strings = codeUnit.getStrings()
+    total = len(all_strings)
+
+    # Validate offset
+    if offset < 0:
+        offset = 0
+    if offset >= total:
+        return {
+            "strings": [],
+            "total": total,
+            "offset": offset,
+            "limit": limit,
+            "has_more": False
+        }
+
+    # Calculate end index
+    if limit <= 0:
+        end = total
+    else:
+        end = min(offset + limit, total)
+
+    # Extract strings
+    result_strings = []
+    for i in range(offset, end):
+        result_strings.append(all_strings[i])
+
+    return {
+        "strings": result_strings,
+        "total": total,
+        "offset": offset,
+        "limit": limit,
+        "has_more": end < total
+    }
+
+
+@jsonrpc
+def search_classes(filepath, keyword):
+    """
+    Search for classes whose name contains the specified keyword.
+
+    Args:
+        filepath: The absolute path to the APK file
+        keyword: The keyword to search for (case-insensitive)
+
+    Returns:
+        A list of matching class signatures
+    """
+    if not filepath or not keyword:
+        raise JSONRPCError(-1, ErrorMessages.MISSING_PARAM)
+
+    apk = getOrLoadApk(filepath)
+    codeUnit = apk.getDex()
+
+    all_classes = codeUnit.getClasses()
+    keyword_lower = keyword.lower()
+
+    matching_classes = []
+    for clazz in all_classes:
+        class_sig = clazz.getSignature(True)
+        if keyword_lower in class_sig.lower():
+            matching_classes.append(class_sig)
+
+    return matching_classes
+
+
+@jsonrpc
+def search_methods(filepath, keyword):
+    """
+    Search for methods whose signature contains the specified keyword.
+
+    Args:
+        filepath: The absolute path to the APK file
+        keyword: The keyword to search for (case-insensitive)
+
+    Returns:
+        A list of matching method signatures
+    """
+    if not filepath or not keyword:
+        raise JSONRPCError(-1, ErrorMessages.MISSING_PARAM)
+
+    apk = getOrLoadApk(filepath)
+    codeUnit = apk.getDex()
+
+    all_methods = codeUnit.getMethods()
+    keyword_lower = keyword.lower()
+
+    matching_methods = []
+    for method in all_methods:
+        method_sig = method.getSignature(True)
+        if keyword_lower in method_sig.lower():
+            matching_methods.append(method_sig)
+
+    return matching_methods
+
+
+@jsonrpc
+def search_strings(filepath, keyword):
+    """
+    Search for strings that contain the specified keyword.
+
+    Args:
+        filepath: The absolute path to the APK file
+        keyword: The keyword to search for (case-sensitive)
+
+    Returns:
+        A list of matching strings
+    """
+    if not filepath or not keyword:
+        raise JSONRPCError(-1, ErrorMessages.MISSING_PARAM)
+
+    apk = getOrLoadApk(filepath)
+    codeUnit = apk.getDex()
+
+    all_strings = codeUnit.getStrings()
+
+    matching_strings = []
+    for string in all_strings:
+        if keyword in string:
+            matching_strings.append(string)
+
+    return matching_strings
+
+
+@jsonrpc
+def find_string_usages(filepath, target_string):
+    """
+    Find all methods that reference the specified string.
+
+    Args:
+        filepath: The absolute path to the APK file
+        target_string: The string to search for
+
+    Returns:
+        A list of dicts containing:
+        - class_signature: The class containing the method
+        - method_signature: The method that uses the string
+    """
+    if not filepath or target_string is None:
+        raise JSONRPCError(-1, ErrorMessages.MISSING_PARAM)
+
+    apk = getOrLoadApk(filepath)
+    codeUnit = apk.getDex()
+
+    all_methods = codeUnit.getMethods()
+    usages = []
+
+    for method in all_methods:
+        # Get method data
+        data = method.getData()
+        if data is None:
+            continue
+
+        # Check if method contains the target string
+        instructions = get_method_instructions(method)
+        if instructions is None:
+            continue
+
+        for instruction in instructions:
+            # Check if instruction references a string
+            instr_str = instruction.format(None)
+            if target_string in instr_str:
+                usages.append({
+                    "class_signature": method.getClassType().getSignature(True),
+                    "method_signature": method.getSignature(True)
+                })
+                break
+
+    return usages
+
+
+@jsonrpc
+def get_main_activity(filepath):
+    """
+    Get the main activity class signature from AndroidManifest.xml.
+
+    Args:
+        filepath: The absolute path to the APK file
+
+    Returns:
+        The main activity class signature, or None if not found
+    """
+    if not filepath:
+        raise JSONRPCError(-1, ErrorMessages.MISSING_PARAM)
+
+    from xml.etree import ElementTree as ET
+
+    manifest_text = get_manifest(filepath)
+    manifest_text = preprocess_manifest_py2(manifest_text)
+
+    if not manifest_text:
+        raise JSONRPCError(-1, ErrorMessages.GET_MANIFEST_FAILED)
+
+    try:
+        root = ET.fromstring(manifest_text.encode('utf-8'))
+    except Exception as e:
+        print("[MCP] Error parsing manifest:", e)
+        raise JSONRPCError(-1, ErrorMessages.GET_MANIFEST_FAILED)
+
+    ANDROID_NS = 'http://schemas.android.com/apk/res/android'
+    package_name = root.attrib.get('package', '').strip()
+
+    app_node = root.find('application')
+    if app_node is None:
+        return None
+
+    # Find activity with MAIN action and LAUNCHER category
+    for activity in app_node.findall('activity'):
+        for intent_filter in activity.findall('intent-filter'):
+            has_main = False
+            has_launcher = False
+
+            for action in intent_filter.findall('action'):
+                action_name = action.attrib.get('{' + ANDROID_NS + '}name', '')
+                if action_name == 'android.intent.action.MAIN':
+                    has_main = True
+
+            for category in intent_filter.findall('category'):
+                category_name = category.attrib.get('{' + ANDROID_NS + '}name', '')
+                if category_name == 'android.intent.category.LAUNCHER':
+                    has_launcher = True
+
+            if has_main and has_launcher:
+                name = activity.attrib.get('{' + ANDROID_NS + '}name', '')
+                if name:
+                    # Normalize class name
+                    if name.startswith('.'):
+                        return 'L' + (package_name + name).replace('.', '/') + ';'
+                    elif '.' not in name:
+                        return 'L' + package_name.replace('.', '/') + '/' + name + ';'
+                    else:
+                        return 'L' + name.replace('.', '/') + ';'
+
+    return None
+
+
+@jsonrpc
+def get_application_class(filepath):
+    """
+    Get the Application class signature from AndroidManifest.xml.
+
+    Args:
+        filepath: The absolute path to the APK file
+
+    Returns:
+        The Application class signature, or None if using default Application class
+    """
+    if not filepath:
+        raise JSONRPCError(-1, ErrorMessages.MISSING_PARAM)
+
+    from xml.etree import ElementTree as ET
+
+    manifest_text = get_manifest(filepath)
+    manifest_text = preprocess_manifest_py2(manifest_text)
+
+    if not manifest_text:
+        raise JSONRPCError(-1, ErrorMessages.GET_MANIFEST_FAILED)
+
+    try:
+        root = ET.fromstring(manifest_text.encode('utf-8'))
+    except Exception as e:
+        print("[MCP] Error parsing manifest:", e)
+        raise JSONRPCError(-1, ErrorMessages.GET_MANIFEST_FAILED)
+
+    ANDROID_NS = 'http://schemas.android.com/apk/res/android'
+    package_name = root.attrib.get('package', '').strip()
+
+    app_node = root.find('application')
+    if app_node is None:
+        return None
+
+    app_name = app_node.attrib.get('{' + ANDROID_NS + '}name', '')
+    if not app_name:
+        return None
+
+    # Normalize class name
+    if app_name.startswith('.'):
+        return 'L' + (package_name + app_name).replace('.', '/') + ';'
+    elif '.' not in app_name:
+        return 'L' + package_name.replace('.', '/') + '/' + app_name + ';'
+    else:
+        return 'L' + app_name.replace('.', '/') + ';'
+
+
+@jsonrpc
 def rename_class_name(filepath, class_signature, new_class_name):
     if not filepath or not class_signature:
         return False
@@ -892,6 +1259,848 @@ def rename_class_name(filepath, class_signature, new_class_name):
     print("rename class:", clazz.getName(), "to", new_class_name)
     clazz.setName(new_class_name)
     return True
+
+
+@jsonrpc
+def get_classes_batch(filepath, class_signatures):
+    """
+    Batch get decompiled code for multiple classes.
+
+    Args:
+        filepath: The absolute path to the APK file
+        class_signatures: List of class signatures to decompile
+
+    Returns:
+        A dict mapping class_signature to decompiled code (or error message)
+    """
+    if not filepath or not class_signatures:
+        raise JSONRPCError(-1, ErrorMessages.MISSING_PARAM)
+
+    apk = getOrLoadApk(filepath)
+    codeUnit = apk.getDex()
+    decomp = DecompilerHelper.getDecompiler(codeUnit)
+
+    if not decomp:
+        raise JSONRPCError(-1, ErrorMessages.DECOMPILE_FAILED)
+
+    result = {}
+    for class_sig in class_signatures:
+        try:
+            clazz = codeUnit.getClass(class_sig)
+            if clazz is None:
+                result[class_sig] = "[Error] Class not found"
+                continue
+
+            if not decomp.decompileClass(clazz.getSignature()):
+                result[class_sig] = "[Error] Decompilation failed"
+                continue
+
+            text = decomp.getDecompiledClassText(clazz.getSignature())
+            result[class_sig] = text
+        except Exception as e:
+            result[class_sig] = "[Error] " + str(e)
+
+    return result
+
+
+def get_method_instructions(method):
+    """
+    Helper function to safely get instructions from a method using correct JEB API.
+
+    Args:
+        method: IDexMethod object
+
+    Returns:
+        List of instructions or None if method has no code
+    """
+    if not method.isInternal():
+        return None
+
+    data = method.getData()
+    if data is None:
+        return None
+
+    code_item = data.getCodeItem()
+    if code_item is None:
+        return None
+
+    return code_item.getInstructions()
+
+
+@jsonrpc
+def find_native_methods(filepath):
+    """
+    Find all native method declarations in the APK.
+
+    Args:
+        filepath: The absolute path to the APK file
+
+    Returns:
+        A list of dicts containing:
+        - class_signature: The class containing the native method
+        - method_signature: The native method signature
+        - method_name: The method name
+    """
+    if not filepath:
+        raise JSONRPCError(-1, ErrorMessages.MISSING_PARAM)
+
+    apk = getOrLoadApk(filepath)
+    codeUnit = apk.getDex()
+
+    # Import IDexMethod to access FLAG_NATIVE
+    from com.pnfsoftware.jeb.core.units.code.android.dex import IDexMethod
+
+    all_methods = codeUnit.getMethods()
+    native_methods = []
+
+    for method in all_methods:
+        # Check if method is native using flags (correct JEB API way)
+        if (method.getGenericFlags() & IDexMethod.FLAG_NATIVE) != 0:
+            native_methods.append({
+                "class_signature": method.getClassType().getSignature(True),
+                "method_signature": method.getSignature(True),
+                "method_name": method.getName()
+            })
+
+    return native_methods
+
+
+@jsonrpc
+def find_reflection_calls(filepath):
+    """
+    Find all reflection API calls (Class.forName, getDeclaredMethod, invoke, etc.).
+
+    Args:
+        filepath: The absolute path to the APK file
+
+    Returns:
+        A list of dicts containing:
+        - class_signature: The class making the reflection call
+        - method_signature: The method making the reflection call
+        - reflection_type: Type of reflection (forName, getDeclaredMethod, invoke, etc.)
+    """
+    if not filepath:
+        raise JSONRPCError(-1, ErrorMessages.MISSING_PARAM)
+
+    apk = getOrLoadApk(filepath)
+    codeUnit = apk.getDex()
+
+    # Reflection API patterns to search for
+    reflection_patterns = [
+        "Ljava/lang/Class;->forName",
+        "Ljava/lang/Class;->getDeclaredMethod",
+        "Ljava/lang/Class;->getMethod",
+        "Ljava/lang/Class;->getDeclaredField",
+        "Ljava/lang/Class;->getField",
+        "Ljava/lang/reflect/Method;->invoke",
+        "Ljava/lang/reflect/Field;->get",
+        "Ljava/lang/reflect/Field;->set",
+        "Ljava/lang/Class;->newInstance",
+        "Ljava/lang/reflect/Constructor;->newInstance"
+    ]
+
+    all_methods = codeUnit.getMethods()
+    reflection_calls = []
+
+    for method in all_methods:
+        # Check if method is internal (has implementation)
+        if not method.isInternal():
+            continue
+
+        # Get method data and code item (correct JEB API way)
+        data = method.getData()
+        if data is None:
+            continue
+
+        code_item = data.getCodeItem()
+        if code_item is None:
+            continue
+
+        instructions = code_item.getInstructions()
+        if instructions is None:
+            continue
+
+        for instruction in instructions:
+            instr_str = instruction.format(None)
+
+            for pattern in reflection_patterns:
+                if pattern in instr_str:
+                    # Extract reflection type
+                    reflection_type = pattern.split("->")[1] if "->" in pattern else "unknown"
+
+                    reflection_calls.append({
+                        "class_signature": method.getClassType().getSignature(True),
+                        "method_signature": method.getSignature(True),
+                        "reflection_type": reflection_type,
+                        "instruction": instr_str
+                    })
+                    break
+
+    return reflection_calls
+
+
+@jsonrpc
+def find_crypto_usage(filepath):
+    """
+    Find all cryptography API usage (Cipher, MessageDigest, SecretKey, etc.).
+
+    Args:
+        filepath: The absolute path to the APK file
+
+    Returns:
+        A list of dicts containing:
+        - class_signature: The class using crypto APIs
+        - method_signature: The method using crypto APIs
+        - crypto_api: The crypto API being used
+    """
+    if not filepath:
+        raise JSONRPCError(-1, ErrorMessages.MISSING_PARAM)
+
+    apk = getOrLoadApk(filepath)
+    codeUnit = apk.getDex()
+
+    crypto_patterns = [
+        "Ljavax/crypto/Cipher;",
+        "Ljava/security/MessageDigest;",
+        "Ljavax/crypto/SecretKey;",
+        "Ljavax/crypto/KeyGenerator;",
+        "Ljavax/crypto/spec/SecretKeySpec;",
+        "Ljavax/crypto/spec/IvParameterSpec;",
+        "Ljava/security/KeyPairGenerator;",
+        "Ljava/security/SecureRandom;",
+        "Ljavax/crypto/Mac;",
+        "Ljava/security/Signature;",
+        "Ljava/security/KeyStore;"
+    ]
+
+    all_methods = codeUnit.getMethods()
+    crypto_usage = []
+
+    for method in all_methods:
+        instructions = get_method_instructions(method)
+        if instructions is None:
+            continue
+
+        found_apis = set()
+        for instruction in instructions:
+            instr_str = instruction.format(None)
+
+            for pattern in crypto_patterns:
+                if pattern in instr_str:
+                    found_apis.add(pattern)
+
+        if found_apis:
+            crypto_usage.append({
+                "class_signature": method.getClassType().getSignature(True),
+                "method_signature": method.getSignature(True),
+                "crypto_apis": list(found_apis)
+            })
+
+    return crypto_usage
+
+
+@jsonrpc
+def find_network_usage(filepath):
+    """
+    Find all network API usage (HttpURLConnection, OkHttp, Socket, etc.).
+
+    Args:
+        filepath: The absolute path to the APK file
+
+    Returns:
+        A list of dicts containing:
+        - class_signature: The class using network APIs
+        - method_signature: The method using network APIs
+        - network_apis: List of network APIs being used
+    """
+    if not filepath:
+        raise JSONRPCError(-1, ErrorMessages.MISSING_PARAM)
+
+    apk = getOrLoadApk(filepath)
+    codeUnit = apk.getDex()
+
+    network_patterns = [
+        "Ljava/net/HttpURLConnection;",
+        "Ljava/net/URL;",
+        "Ljava/net/Socket;",
+        "Ljava/net/ServerSocket;",
+        "Lokhttp3/OkHttpClient;",
+        "Lokhttp3/Request;",
+        "Lokhttp3/Response;",
+        "Lorg/apache/http/client/HttpClient;",
+        "Lorg/apache/http/HttpResponse;",
+        "Landroid/webkit/WebView;"
+    ]
+
+    all_methods = codeUnit.getMethods()
+    network_usage = []
+
+    for method in all_methods:
+        instructions = get_method_instructions(method)
+        if instructions is None:
+            continue
+
+        found_apis = set()
+        for instruction in instructions:
+            instr_str = instruction.format(None)
+
+            for pattern in network_patterns:
+                if pattern in instr_str:
+                    found_apis.add(pattern)
+
+        if found_apis:
+            network_usage.append({
+                "class_signature": method.getClassType().getSignature(True),
+                "method_signature": method.getSignature(True),
+                "network_apis": list(found_apis)
+            })
+
+    return network_usage
+
+
+@jsonrpc
+def find_file_operations(filepath):
+    """
+    Find all file operation API usage (File, FileInputStream, SharedPreferences, etc.).
+
+    Args:
+        filepath: The absolute path to the APK file
+
+    Returns:
+        A list of dicts containing:
+        - class_signature: The class performing file operations
+        - method_signature: The method performing file operations
+        - file_apis: List of file APIs being used
+    """
+    if not filepath:
+        raise JSONRPCError(-1, ErrorMessages.MISSING_PARAM)
+
+    apk = getOrLoadApk(filepath)
+    codeUnit = apk.getDex()
+
+    file_patterns = [
+        "Ljava/io/File;",
+        "Ljava/io/FileInputStream;",
+        "Ljava/io/FileOutputStream;",
+        "Ljava/io/FileReader;",
+        "Ljava/io/FileWriter;",
+        "Ljava/io/RandomAccessFile;",
+        "Landroid/content/SharedPreferences;",
+        "Landroid/database/sqlite/SQLiteDatabase;",
+        "Ljava/io/BufferedReader;",
+        "Ljava/io/BufferedWriter;"
+    ]
+
+    all_methods = codeUnit.getMethods()
+    file_usage = []
+
+    for method in all_methods:
+        instructions = get_method_instructions(method)
+
+        if instructions is None:
+
+            continue
+
+        found_apis = set()
+        for instruction in instructions:
+            instr_str = instruction.format(None)
+
+            for pattern in file_patterns:
+                if pattern in instr_str:
+                    found_apis.add(pattern)
+
+        if found_apis:
+            file_usage.append({
+                "class_signature": method.getClassType().getSignature(True),
+                "method_signature": method.getSignature(True),
+                "file_apis": list(found_apis)
+            })
+
+    return file_usage
+
+
+@jsonrpc
+def find_dynamic_loading(filepath):
+    """
+    Find all dynamic code loading (DexClassLoader, PathClassLoader, etc.).
+
+    Args:
+        filepath: The absolute path to the APK file
+
+    Returns:
+        A list of dicts containing:
+        - class_signature: The class performing dynamic loading
+        - method_signature: The method performing dynamic loading
+        - loader_type: Type of class loader being used
+    """
+    if not filepath:
+        raise JSONRPCError(-1, ErrorMessages.MISSING_PARAM)
+
+    apk = getOrLoadApk(filepath)
+    codeUnit = apk.getDex()
+
+    loader_patterns = [
+        "Ldalvik/system/DexClassLoader;",
+        "Ldalvik/system/PathClassLoader;",
+        "Ldalvik/system/InMemoryDexClassLoader;",
+        "Ldalvik/system/DexFile;",
+        "Ljava/lang/ClassLoader;->loadClass"
+    ]
+
+    all_methods = codeUnit.getMethods()
+    dynamic_loading = []
+
+    for method in all_methods:
+        instructions = get_method_instructions(method)
+
+        if instructions is None:
+
+            continue
+
+        for instruction in instructions:
+            instr_str = instruction.format(None)
+
+            for pattern in loader_patterns:
+                if pattern in instr_str:
+                    dynamic_loading.append({
+                        "class_signature": method.getClassType().getSignature(True),
+                        "method_signature": method.getSignature(True),
+                        "loader_type": pattern,
+                        "instruction": instr_str
+                    })
+                    break
+
+    return dynamic_loading
+
+
+@jsonrpc
+def get_method_callees(filepath, method_signature):
+    """
+    Get all methods called by the given method (callees).
+
+    Args:
+        filepath: The absolute path to the APK file
+        method_signature: The method signature to analyze
+
+    Returns:
+        A list of method signatures that are called by this method
+    """
+    if not filepath or not method_signature:
+        raise JSONRPCError(-1, ErrorMessages.MISSING_PARAM)
+
+    apk = getOrLoadApk(filepath)
+    codeUnit = apk.getDex()
+
+    method = codeUnit.getMethod(method_signature)
+    if method is None:
+        raise_method_not_found(method_signature)
+
+    callees = []
+    instructions = get_method_instructions(method)
+    if instructions is None:
+        return callees
+
+    for instruction in instructions:
+        instr_str = instruction.format(None)
+
+        # Look for method invocation instructions
+        if "invoke" in instr_str:
+            # Extract the called method signature
+            # Format: invoke-xxx {registers}, Lclass;->method(params)returntype
+            try:
+                if "->" in instr_str:
+                    parts = instr_str.split("->")
+                    if len(parts) >= 2:
+                        # Find the class part
+                        class_part = parts[0].split()[-1]
+                        # Get the method part
+                        method_part = parts[1].split()[0] if parts[1] else ""
+
+                        if class_part and method_part:
+                            called_sig = class_part + "->" + method_part
+                            if called_sig not in callees:
+                                callees.append(called_sig)
+            except Exception:
+                pass
+
+    return callees
+
+
+@jsonrpc
+def get_permissions(filepath):
+    """
+    Get all permissions declared in AndroidManifest.xml.
+
+    Args:
+        filepath: The absolute path to the APK file
+
+    Returns:
+        A dict containing:
+        - permissions: List of requested permissions
+        - custom_permissions: List of custom defined permissions
+    """
+    if not filepath:
+        raise JSONRPCError(-1, ErrorMessages.MISSING_PARAM)
+
+    from xml.etree import ElementTree as ET
+
+    manifest_text = get_manifest(filepath)
+    manifest_text = preprocess_manifest_py2(manifest_text)
+
+    if not manifest_text:
+        raise JSONRPCError(-1, ErrorMessages.GET_MANIFEST_FAILED)
+
+    try:
+        root = ET.fromstring(manifest_text.encode('utf-8'))
+    except Exception as e:
+        print("[MCP] Error parsing manifest:", e)
+        raise JSONRPCError(-1, ErrorMessages.GET_MANIFEST_FAILED)
+
+    ANDROID_NS = 'http://schemas.android.com/apk/res/android'
+
+    # Get requested permissions
+    permissions = []
+    for uses_permission in root.findall('uses-permission'):
+        perm_name = uses_permission.attrib.get('{' + ANDROID_NS + '}name', '')
+        if perm_name:
+            permissions.append(perm_name)
+
+    # Get custom defined permissions
+    custom_permissions = []
+    for permission in root.findall('permission'):
+        perm_name = permission.attrib.get('{' + ANDROID_NS + '}name', '')
+        prot_level = permission.attrib.get('{' + ANDROID_NS + '}protectionLevel', 'normal')
+        if perm_name:
+            custom_permissions.append({
+                "name": perm_name,
+                "protectionLevel": prot_level
+            })
+
+    return {
+        "permissions": permissions,
+        "custom_permissions": custom_permissions
+    }
+
+
+@jsonrpc
+def get_broadcast_receivers(filepath):
+    """
+    Get all BroadcastReceiver components from AndroidManifest.xml.
+
+    Args:
+        filepath: The absolute path to the APK file
+
+    Returns:
+        A list of dicts containing receiver information
+    """
+    if not filepath:
+        raise JSONRPCError(-1, ErrorMessages.MISSING_PARAM)
+
+    from xml.etree import ElementTree as ET
+
+    manifest_text = get_manifest(filepath)
+    manifest_text = preprocess_manifest_py2(manifest_text)
+
+    if not manifest_text:
+        raise JSONRPCError(-1, ErrorMessages.GET_MANIFEST_FAILED)
+
+    try:
+        root = ET.fromstring(manifest_text.encode('utf-8'))
+    except Exception as e:
+        print("[MCP] Error parsing manifest:", e)
+        raise JSONRPCError(-1, ErrorMessages.GET_MANIFEST_FAILED)
+
+    ANDROID_NS = 'http://schemas.android.com/apk/res/android'
+    package_name = root.attrib.get('package', '').strip()
+
+    app_node = root.find('application')
+    if app_node is None:
+        return []
+
+    receivers = []
+    for receiver in app_node.findall('receiver'):
+        name = receiver.attrib.get('{' + ANDROID_NS + '}name', '')
+        exported = receiver.attrib.get('{' + ANDROID_NS + '}exported', '')
+        enabled = receiver.attrib.get('{' + ANDROID_NS + '}enabled', 'true')
+
+        # Get intent filters
+        intent_filters = []
+        for intent_filter in receiver.findall('intent-filter'):
+            actions = []
+            for action in intent_filter.findall('action'):
+                action_name = action.attrib.get('{' + ANDROID_NS + '}name', '')
+                if action_name:
+                    actions.append(action_name)
+            if actions:
+                intent_filters.append(actions)
+
+        if name:
+            # Normalize class name
+            if name.startswith('.'):
+                full_name = 'L' + (package_name + name).replace('.', '/') + ';'
+            elif '.' not in name:
+                full_name = 'L' + package_name.replace('.', '/') + '/' + name + ';'
+            else:
+                full_name = 'L' + name.replace('.', '/') + ';'
+
+            receivers.append({
+                "class_signature": full_name,
+                "exported": exported if exported else ("true" if intent_filters else "false"),
+                "enabled": enabled,
+                "intent_filters": intent_filters
+            })
+
+    return receivers
+
+
+@jsonrpc
+def get_content_providers(filepath):
+    """
+    Get all ContentProvider components from AndroidManifest.xml.
+
+    Args:
+        filepath: The absolute path to the APK file
+
+    Returns:
+        A list of dicts containing provider information
+    """
+    if not filepath:
+        raise JSONRPCError(-1, ErrorMessages.MISSING_PARAM)
+
+    from xml.etree import ElementTree as ET
+
+    manifest_text = get_manifest(filepath)
+    manifest_text = preprocess_manifest_py2(manifest_text)
+
+    if not manifest_text:
+        raise JSONRPCError(-1, ErrorMessages.GET_MANIFEST_FAILED)
+
+    try:
+        root = ET.fromstring(manifest_text.encode('utf-8'))
+    except Exception as e:
+        print("[MCP] Error parsing manifest:", e)
+        raise JSONRPCError(-1, ErrorMessages.GET_MANIFEST_FAILED)
+
+    ANDROID_NS = 'http://schemas.android.com/apk/res/android'
+    package_name = root.attrib.get('package', '').strip()
+
+    app_node = root.find('application')
+    if app_node is None:
+        return []
+
+    providers = []
+    for provider in app_node.findall('provider'):
+        name = provider.attrib.get('{' + ANDROID_NS + '}name', '')
+        authorities = provider.attrib.get('{' + ANDROID_NS + '}authorities', '')
+        exported = provider.attrib.get('{' + ANDROID_NS + '}exported', '')
+        enabled = provider.attrib.get('{' + ANDROID_NS + '}enabled', 'true')
+        read_perm = provider.attrib.get('{' + ANDROID_NS + '}readPermission', '')
+        write_perm = provider.attrib.get('{' + ANDROID_NS + '}writePermission', '')
+
+        if name:
+            # Normalize class name
+            if name.startswith('.'):
+                full_name = 'L' + (package_name + name).replace('.', '/') + ';'
+            elif '.' not in name:
+                full_name = 'L' + package_name.replace('.', '/') + '/' + name + ';'
+            else:
+                full_name = 'L' + name.replace('.', '/') + ';'
+
+            providers.append({
+                "class_signature": full_name,
+                "authorities": authorities,
+                "exported": exported,
+                "enabled": enabled,
+                "readPermission": read_perm,
+                "writePermission": write_perm
+            })
+
+    return providers
+
+
+@jsonrpc
+def find_subclasses(filepath, parent_class_signature):
+    """
+    Find all subclasses of the given class.
+
+    Args:
+        filepath: The absolute path to the APK file
+        parent_class_signature: The parent class signature
+
+    Returns:
+        A list of class signatures that extend the parent class
+    """
+    if not filepath or not parent_class_signature:
+        raise JSONRPCError(-1, ErrorMessages.MISSING_PARAM)
+
+    apk = getOrLoadApk(filepath)
+    codeUnit = apk.getDex()
+
+    all_classes = codeUnit.getClasses()
+    subclasses = []
+
+    for clazz in all_classes:
+        superclass_sig = clazz.getSupertypeSignature(True)
+        if superclass_sig == parent_class_signature:
+            subclasses.append(clazz.getSignature(True))
+
+    return subclasses
+
+
+@jsonrpc
+def get_package_tree(filepath):
+    """
+    Get the package structure tree of the APK.
+
+    Args:
+        filepath: The absolute path to the APK file
+
+    Returns:
+        A dict representing the package tree with class counts
+    """
+    if not filepath:
+        raise JSONRPCError(-1, ErrorMessages.MISSING_PARAM)
+
+    apk = getOrLoadApk(filepath)
+    codeUnit = apk.getDex()
+
+    all_classes = codeUnit.getClasses()
+    package_tree = {}
+
+    for clazz in all_classes:
+        class_sig = clazz.getSignature(True)
+        # Extract package from signature (e.g., Lcom/example/app/MainActivity; -> com.example.app)
+        if class_sig.startswith('L') and ';' in class_sig:
+            path = class_sig[1:class_sig.rfind(';')]
+            parts = path.split('/')
+
+            # Build tree structure
+            current = package_tree
+            for part in parts[:-1]:  # Exclude class name
+                if part not in current:
+                    current[part] = {"_classes": [], "_subpackages": {}}
+                current = current[part]["_subpackages"]
+
+            # Add class to final package
+            if len(parts) > 0:
+                pkg = parts[-2] if len(parts) > 1 else parts[0]
+                if pkg not in current:
+                    current[pkg] = {"_classes": [], "_subpackages": {}}
+                current[pkg]["_classes"].append(parts[-1])
+
+    return package_tree
+
+
+@jsonrpc
+def identify_third_party_libraries(filepath):
+    """
+    Identify potential third-party libraries based on common package patterns.
+
+    Args:
+        filepath: The absolute path to the APK file
+
+    Returns:
+        A dict with library names and their package prefixes
+    """
+    if not filepath:
+        raise JSONRPCError(-1, ErrorMessages.MISSING_PARAM)
+
+    apk = getOrLoadApk(filepath)
+    codeUnit = apk.getDex()
+
+    # Common third-party library patterns
+    library_patterns = {
+        "okhttp": "Lokhttp3/",
+        "retrofit": "Lretrofit2/",
+        "gson": "Lcom/google/gson/",
+        "glide": "Lcom/bumptech/glide/",
+        "picasso": "Lcom/squareup/picasso/",
+        "fresco": "Lcom/facebook/fresco/",
+        "rxjava": "Lio/reactivex/",
+        "rxandroid": "Lio/reactivex/android/",
+        "butterknife": "Lbutterknife/",
+        "dagger": "Ldagger/",
+        "eventbus": "Lorg/greenrobot/eventbus/",
+        "fastjson": "Lcom/alibaba/fastjson/",
+        "android_support": "Landroid/support/",
+        "androidx": "Landroidx/",
+        "kotlin": "Lkotlin/",
+        "okio": "Lokio/",
+        "protobuf": "Lcom/google/protobuf/"
+    }
+
+    all_classes = codeUnit.getClasses()
+    found_libraries = {}
+
+    for lib_name, pattern in library_patterns.items():
+        count = 0
+        for clazz in all_classes:
+            class_sig = clazz.getSignature(True)
+            if class_sig.startswith(pattern):
+                count += 1
+
+        if count > 0:
+            found_libraries[lib_name] = {
+                "package_prefix": pattern,
+                "class_count": count
+            }
+
+    return found_libraries
+
+
+@jsonrpc
+def get_field_read_write_refs(filepath, field_signature):
+    """
+    Get field references separated by read and write operations.
+
+    Args:
+        filepath: The absolute path to the APK file
+        field_signature: The field signature
+
+    Returns:
+        A dict with 'reads' and 'writes' lists
+    """
+    if not filepath or not field_signature:
+        raise JSONRPCError(-1, ErrorMessages.MISSING_PARAM)
+
+    apk = getOrLoadApk(filepath)
+    codeUnit = apk.getDex()
+
+    field = codeUnit.getField(field_signature)
+    if field is None:
+        raise_field_not_found(field_signature)
+
+    all_methods = codeUnit.getMethods()
+    reads = []
+    writes = []
+
+    for method in all_methods:
+        instructions = get_method_instructions(method)
+        if instructions is None:
+            continue
+
+        for instruction in instructions:
+            instr_str = instruction.format(None)
+
+            if field_signature in instr_str:
+                # Determine if it's a read or write based on instruction
+                if "iget" in instr_str or "sget" in instr_str:
+                    # Read operation
+                    reads.append({
+                        "class_signature": method.getClassType().getSignature(True),
+                        "method_signature": method.getSignature(True)
+                    })
+                elif "iput" in instr_str or "sput" in instr_str:
+                    # Write operation
+                    writes.append({
+                        "class_signature": method.getClassType().getSignature(True),
+                        "method_signature": method.getSignature(True)
+                    })
+
+    return {
+        "reads": reads,
+        "writes": writes
+    }
 
 
 @jsonrpc
